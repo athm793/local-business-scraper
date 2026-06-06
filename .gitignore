@@ -1,0 +1,9 @@
+browser_profile*/
+outputs/
+businesses.db
+businesses.db-shm
+businesses.db-wal
+__pycache__/
+*.pyc
+*.pyo
+.env
