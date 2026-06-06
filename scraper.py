@@ -323,16 +323,32 @@ class GoogleMapsScraper:
                 if tab_clicked:
                     break
 
-            # Wait for review cards to actually appear in the DOM before proceeding.
-            # This is the main reason reviews were coming back empty: we were checking
-            # for [data-review-id] elements before the tab had finished loading.
+            # Wait for review cards to appear in the DOM, then scroll past any
+            # "Browse and Book" or promotional widget that sits above the reviews
+            # feed. These widgets live inside the same scrollable container and
+            # cause lazy-loading of review items to never trigger when we scroll
+            # the wrong container or don't scroll at all.
             if tab_clicked:
                 try:
                     await page.wait_for_selector(
                         '[data-review-id], .jftiEf', timeout=7000
                     )
                 except Exception:
-                    await asyncio.sleep(2.5)   # page was slow — still give it a chance
+                    await asyncio.sleep(2.5)
+
+                # Initial scroll to push past any promotional widget above reviews
+                try:
+                    for ps in ('div.m6QErb[aria-label]', 'div.m6QErb', '[role="feed"]'):
+                        init_pane = await page.query_selector(ps)
+                        if init_pane:
+                            await page.evaluate("el => el.scrollBy(0, 350)", init_pane)
+                            await asyncio.sleep(0.9)
+                            break
+                    else:
+                        await page.evaluate("window.scrollBy(0, 350)")
+                        await asyncio.sleep(0.9)
+                except Exception:
+                    pass
             else:
                 await asyncio.sleep(1.0)
 
@@ -357,11 +373,25 @@ class GoogleMapsScraper:
                     break
 
             # ── Locate the scrollable review pane ─────────────────────────────
+            # Prefer a pane that already contains review cards — the booking widget
+            # can have its own div.m6QErb that matches the selector but holds booking
+            # slots, not reviews. Selecting it means we scroll the wrong container.
             pane = None
             for ps in ('div.m6QErb[aria-label]', 'div[role="feed"]', 'div.m6QErb'):
-                pane = await page.query_selector(ps)
+                candidates = await page.query_selector_all(ps)
+                for c in candidates:
+                    # Prefer a container that already has review items in it
+                    if await c.query_selector('[data-review-id], .jftiEf'):
+                        pane = c
+                        break
                 if pane:
                     break
+            if not pane:
+                # Fallback: take first matching container even without confirmed items
+                for ps in ('div.m6QErb[aria-label]', 'div[role="feed"]', 'div.m6QErb'):
+                    pane = await page.query_selector(ps)
+                    if pane:
+                        break
 
             # ── Scroll and collect ────────────────────────────────────────────
             seen: set = set()
@@ -482,8 +512,14 @@ class GoogleMapsScraper:
                         reviews.append(r)
 
                 stalls = 0 if added else stalls + 1
-                if len(reviews) < max_reviews and pane:
-                    await human_scroll(page, pane, 2000)
+                if len(reviews) < max_reviews:
+                    if pane:
+                        await human_scroll(page, pane, 2000)
+                    else:
+                        try:
+                            await page.evaluate("window.scrollBy(0, 2000)")
+                        except Exception:
+                            pass
                     await asyncio.sleep(random.gauss(1.3, 0.3))
 
         except Exception as e:
@@ -541,22 +577,37 @@ class GoogleMapsScraper:
             return "Legit Website"
 
     async def _scrape_schedule(self, page) -> str:
-        """Return the full weekly schedule text for the current business page."""
-        _DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+        """Return the full weekly schedule for the current business page.
+
+        Two layout types exist on Google Maps:
+        - Inline dropdown: the schedule is a collapsible div inside the business
+          card. Clicking [data-item-id="oh"] expands it in-place. After expanding,
+          inner_text() of that same element contains the full schedule.
+        - Separate section: clicking opens a dedicated Hours page with a table
+          (table.eK4R0e or similar selectors).
+        We handle both.
+        """
+        _DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+                 'Saturday', 'Sunday')
 
         def _has_days(t: str) -> bool:
             return sum(1 for d in _DAYS if d in t) >= 2
 
         try:
-            # Strategy 0: aria-label on the hours element (sometimes has full schedule)
+            # ── Check if already expanded / aria-label has full schedule ──────
             for sel in ('[data-item-id="oh"]', '[aria-label*="hour" i]'):
                 el = await page.query_selector(sel)
-                if el:
-                    label = await el.get_attribute('aria-label') or ''
-                    if _has_days(label):
-                        return self._clean_text(label)
+                if not el:
+                    continue
+                label = await el.get_attribute('aria-label') or ''
+                if _has_days(label):
+                    return self._clean_text(label)
+                # inner_text covers the "inline dropdown already open" case
+                text = self._clean_text(await el.inner_text())
+                if _has_days(text):
+                    return text
 
-            # Click the hours element to expand
+            # ── Click to expand ───────────────────────────────────────────────
             for sel in ('[data-item-id="oh"] button', '[data-item-id="oh"]',
                         'button[jsaction*="openhours"]', '[jsaction*="openhours"]'):
                 btn = await page.query_selector(sel)
@@ -565,7 +616,16 @@ class GoogleMapsScraper:
                     await asyncio.sleep(1.5)
                     break
 
-            # Strategy 1: known stable table/div selectors
+            # ── Re-read [data-item-id="oh"] — covers the inline dropdown case ─
+            # After clicking, the element expands in-place and its inner_text()
+            # now contains the full day-by-day schedule (e.g. Saraland Smiles).
+            el = await page.query_selector('[data-item-id="oh"]')
+            if el:
+                text = self._clean_text(await el.inner_text())
+                if _has_days(text):
+                    return text
+
+            # ── Known table/div selectors — covers the separate-section case ──
             for sel in ('table.eK4R0e', 'div.eK4R0e', 'div.o0Svhf',
                         'div.t39EBf', '[data-day-of-week]'):
                 el = await page.query_selector(sel)
@@ -574,14 +634,14 @@ class GoogleMapsScraper:
                     if _has_days(text):
                         return text
 
-            # Strategy 2: any aria-expanded container with day content
+            # ── aria-expanded container fallback ──────────────────────────────
             exp = await page.query_selector('[aria-expanded="true"]')
             if exp:
                 text = self._clean_text(await exp.inner_text())
                 if _has_days(text) and len(text) > 20:
                     return text
 
-            # Strategy 3: scan divs for one containing multiple weekday names
+            # ── Broad DOM scan ────────────────────────────────────────────────
             for div in await page.query_selector_all('div, section, table'):
                 try:
                     text = (await div.inner_text()).strip()
