@@ -426,7 +426,9 @@ class App(ctk.CTk):
             self._kw_entry.insert(0, cfg.get("keyword", ""))
             self._depth_entry.delete(0, "end")
             self._depth_entry.insert(0, cfg.get("depth", "100"))
-            self._workers_seg.set(cfg.get("workers", "2"))
+            w = int(cfg.get("workers", 2))
+            self._workers_slider.set(w)
+            self._workers_val_label.configure(text=str(w))
             self._headless_var.set(cfg.get("headless", False))
             self._rebuild_worker_rows()
         except Exception:
@@ -436,7 +438,7 @@ class App(ctk.CTk):
         cfg = {
             "keyword":  self._kw_entry.get().strip(),
             "depth":    self._depth_entry.get().strip(),
-            "workers":  self._workers_seg.get(),
+            "workers":  self._get_workers(),
             "headless": self._headless_var.get(),
         }
         try:
@@ -501,16 +503,23 @@ class App(ctk.CTk):
         self._depth_entry.insert(0, "100")
         self._depth_entry.pack(fill="x", padx=16, pady=(0, 10))
 
-        ctk.CTkLabel(cfg_frame, text="Parallel workers",
-                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(
-            anchor="w", padx=16, pady=(0, 4))
-        self._workers_seg = ctk.CTkSegmentedButton(
-            cfg_frame, values=["1", "2", "3", "4"],
-            font=ctk.CTkFont(size=12),
-            command=lambda _: (self._rebuild_worker_rows(), self._update_estimate()),
+        workers_hdr = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        workers_hdr.pack(fill="x", padx=16, pady=(0, 2))
+        ctk.CTkLabel(workers_hdr, text="Parallel workers",
+                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(side="left")
+        self._workers_val_label = ctk.CTkLabel(
+            workers_hdr, text="2",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color=AC_BLUE)
+        self._workers_val_label.pack(side="right")
+
+        self._workers_slider = ctk.CTkSlider(
+            cfg_frame, from_=1, to=20, number_of_steps=19,
+            button_color=AC_BLUE, button_hover_color=AC_BLUE,
+            progress_color=AC_BLUE,
+            command=self._on_workers_change,
         )
-        self._workers_seg.set("2")
-        self._workers_seg.pack(fill="x", padx=16, pady=(0, 10))
+        self._workers_slider.set(2)
+        self._workers_slider.pack(fill="x", padx=16, pady=(0, 10))
 
         self._headless_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
@@ -654,7 +663,10 @@ class App(ctk.CTk):
                                        font=ctk.CTkFont(size=10), text_color=TX_MUT)
         self._loc_prog.pack(side="right", padx=16)
 
-        self._workers_wrap = ctk.CTkFrame(w_outer, fg_color="transparent")
+        self._workers_wrap = ctk.CTkScrollableFrame(
+            w_outer, fg_color="transparent", height=158,
+            scrollbar_button_color=BD, scrollbar_button_hover_color=TX_MUT,
+        )
         self._workers_wrap.pack(fill="x", padx=4, pady=(0, 10))
 
         ctk.CTkFrame(main, height=1, fg_color=BD, corner_radius=0).grid(
@@ -731,11 +743,20 @@ class App(ctk.CTk):
 
     # ── Worker rows ────────────────────────────────────────────────────────────
 
+    def _get_workers(self) -> int:
+        return int(round(self._workers_slider.get()))
+
+    def _on_workers_change(self, value):
+        n = int(round(value))
+        self._workers_val_label.configure(text=str(n))
+        self._rebuild_worker_rows()
+        self._update_estimate()
+
     def _rebuild_worker_rows(self):
         for r in self._worker_rows:
             r.destroy()
         self._worker_rows.clear()
-        n = int(self._workers_seg.get())
+        n = self._get_workers()
         for i in range(n):
             self._worker_rows.append(WorkerRow(self._workers_wrap, i))
 
@@ -802,7 +823,7 @@ class App(ctk.CTk):
             depth = int(self._depth_entry.get() or "100")
         except ValueError:
             depth = 100
-        workers  = int(self._workers_seg.get())
+        workers  = self._get_workers()
         avg_sec  = 5
         total    = n * depth * avg_sec / max(workers, 1)
         if n == 0:
@@ -840,7 +861,7 @@ class App(ctk.CTk):
                 return
             locations = [{"location": single, "city": "", "state": "", "country": ""}]
 
-        n_workers = int(self._workers_seg.get())
+        n_workers = self._get_workers()
         headless  = self._headless_var.get()
 
         self._save_config()
@@ -863,7 +884,7 @@ class App(ctk.CTk):
 
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
-        self._workers_seg.configure(state="disabled")
+        self._workers_slider.configure(state="disabled")
         self._c_records.set("0")
         self._c_rate.set("—")
         self._c_elapsed.set("00:00:00")
@@ -888,6 +909,7 @@ class App(ctk.CTk):
             depth=depth, db=db, csv_writer=csv_writer,
             log_fn=log_fn, worker_status_fn=worker_fn,
             overall_progress_fn=overall_fn,
+            record_tick_fn=lambda: self._q.put(("record_tick",)),
             stop_event=self._stop_event, headless=headless,
         )
 
@@ -935,6 +957,9 @@ class App(ctk.CTk):
                 kind = item[0]
                 if kind == "log":
                     self._log_line(item[1])
+                elif kind == "record_tick":
+                    self._total_records += 1
+                    self._c_records.set(f"{self._total_records:,}")
                 elif kind == "worker":
                     _, wid, status = item
                     if wid < len(self._worker_rows):
@@ -1003,7 +1028,7 @@ class App(ctk.CTk):
         self._start_time    = None
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
-        self._workers_seg.configure(state="normal")
+        self._workers_slider.configure(state="normal")
         self._status.configure(text="Done")
         self._log_line(
             f"── Complete: {self._total_records:,} records  ·  {self._completed_loc} locations ──",

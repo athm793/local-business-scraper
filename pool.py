@@ -55,6 +55,7 @@ class ScraperPool:
         overall_progress_fn: Callable[[int, int, int], None],
         stop_event: threading.Event,
         headless: bool = False,
+        record_tick_fn: Optional[Callable[[], None]] = None,
     ):
         self.keyword = keyword
         self.locations = locations
@@ -65,6 +66,7 @@ class ScraperPool:
         self._log = log_fn
         self._worker_status = worker_status_fn
         self._overall_progress = overall_progress_fn
+        self._record_tick = record_tick_fn
         self._stop_event = stop_event
         self.headless = headless
         self._completed_locations = 0
@@ -137,6 +139,8 @@ class ScraperPool:
                             "country": loc_ref.get("country", ""),
                         })
                         self.csv_writer.append(data)
+                        if self._record_tick:
+                            self._record_tick()
                     return fn
 
                 scraper = GoogleMapsScraper(
