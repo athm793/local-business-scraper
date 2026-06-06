@@ -91,6 +91,10 @@ class ScraperPool:
         profile_dir = Path(f"browser_profile_{worker_id}").resolve()
         profile_dir.mkdir(exist_ok=True)
 
+        # Stagger launches so all workers don't hit Google simultaneously
+        if worker_id > 0:
+            await asyncio.sleep(worker_id * 8)
+
         self._worker_status(worker_id, {"state": "starting", "location": "", "current": 0, "total": 0})
 
         ctx = await p.chromium.launch_persistent_context(

@@ -102,8 +102,13 @@ class GoogleMapsScraper:
 
         self._log(f"Searching: {self.keyword} in {self.location}")
 
-        await page.goto(search_url, wait_until="networkidle", timeout=30000)
-        await delay(3, 6)
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+        # Google Maps never reaches networkidle — wait for the results feed instead
+        try:
+            await page.wait_for_selector('div[role="feed"]', timeout=20000)
+        except Exception:
+            pass
+        await delay(2, 4)
         await self._dismiss_dialogs(page)
 
         self._log("Collecting result URLs...")
