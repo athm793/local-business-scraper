@@ -251,6 +251,20 @@ class GoogleMapsScraper:
                 return None
         return None
 
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        """Strip leading Google Maps icon characters from inner_text() results.
+
+        Google Maps prepends an icon glyph (non-ASCII Unicode) + newline before
+        address/phone text. Discard any line that has no ASCII letter or digit.
+        """
+        lines = text.strip().splitlines()
+        clean = [
+            l.strip() for l in lines
+            if l.strip() and any(c.isascii() and (c.isalpha() or c.isdigit()) for c in l)
+        ]
+        return "\n".join(clean) if clean else text.strip()
+
     async def _extract(self, page) -> dict | None:
         data: dict = {}
 
@@ -269,23 +283,27 @@ class GoogleMapsScraper:
         data["place_url"] = page.url
         data["scraped_at"] = datetime.now().isoformat()
 
+        # Rating + review count — Google Maps sometimes puts both in one element's
+        # aria-label (e.g. "4.5 stars 1,607 reviews"), so probe both selectors and
+        # extract whichever fields haven't been filled yet.
         try:
-            el = await page.query_selector('[aria-label*="star"]')
-            if el:
+            for sel in ('[aria-label*="star"]', '[aria-label*="review"]'):
+                el = await page.query_selector(sel)
+                if not el:
+                    continue
                 label = await el.get_attribute("aria-label") or ""
-                m2 = re.search(r"(\d+\.?\d*)\s+star", label, re.IGNORECASE)
-                if m2:
-                    data["rating"] = float(m2.group(1))
-        except Exception:
-            pass
-
-        try:
-            el = await page.query_selector('[aria-label*="review"]')
-            if el:
-                label = await el.get_attribute("aria-label") or ""
-                m3 = re.search(r"([\d,]+)\s+review", label, re.IGNORECASE)
-                if m3:
-                    data["review_count"] = int(m3.group(1).replace(",", ""))
+                if "rating" not in data:
+                    m_r = re.search(r"(\d+\.?\d*)\s+stars?", label, re.IGNORECASE)
+                    if not m_r:
+                        m_r = re.search(r"rated\s+(\d+\.?\d*)", label, re.IGNORECASE)
+                    if m_r:
+                        data["rating"] = float(m_r.group(1))
+                if "review_count" not in data:
+                    m_c = re.search(r"([\d,]+)\s+reviews?", label, re.IGNORECASE)
+                    if m_c:
+                        data["review_count"] = int(m_c.group(1).replace(",", ""))
+                if "rating" in data and "review_count" in data:
+                    break
         except Exception:
             pass
 
@@ -301,7 +319,7 @@ class GoogleMapsScraper:
             if not el:
                 el = await page.query_selector('[aria-label*="ddress"]')
             if el:
-                data["address"] = (await el.inner_text()).strip()
+                data["address"] = self._clean_text(await el.inner_text())
         except Exception:
             pass
 
@@ -310,7 +328,7 @@ class GoogleMapsScraper:
             if not el:
                 el = await page.query_selector('[aria-label*="hone"]')
             if el:
-                data["phone"] = (await el.inner_text()).strip()
+                data["phone"] = self._clean_text(await el.inner_text())
         except Exception:
             pass
 
