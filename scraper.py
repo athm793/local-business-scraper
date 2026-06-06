@@ -305,14 +305,36 @@ class GoogleMapsScraper:
         """Return up to max_reviews recent reviews from the current business page."""
         reviews = []
         try:
-            # ── Open the Reviews tab ──────────────────────────────────────────
-            tabs = await page.query_selector_all('button[role="tab"]')
-            for tab in tabs:
-                text = (await tab.inner_text()).strip().lower()
-                if "review" in text and len(text) < 30:
-                    await human_click(page, tab)
-                    await asyncio.sleep(1.5)
+            # ── Open Reviews tab ──────────────────────────────────────────────
+            # Try every element type that could be a tab — Google uses button,
+            # a, and div variants depending on the business page layout.
+            tab_clicked = False
+            for tab_sel in ('button[role="tab"]', 'a[role="tab"]', '[role="tab"]'):
+                tabs = await page.query_selector_all(tab_sel)
+                for tab in tabs:
+                    try:
+                        text = (await tab.inner_text()).strip().lower()
+                        if "review" in text and len(text) < 40:
+                            await human_click(page, tab)
+                            tab_clicked = True
+                            break
+                    except Exception:
+                        pass
+                if tab_clicked:
                     break
+
+            # Wait for review cards to actually appear in the DOM before proceeding.
+            # This is the main reason reviews were coming back empty: we were checking
+            # for [data-review-id] elements before the tab had finished loading.
+            if tab_clicked:
+                try:
+                    await page.wait_for_selector(
+                        '[data-review-id], .jftiEf', timeout=7000
+                    )
+                except Exception:
+                    await asyncio.sleep(2.5)   # page was slow — still give it a chance
+            else:
+                await asyncio.sleep(1.0)
 
             # ── Sort by Newest (best-effort) ──────────────────────────────────
             sort_btn = await page.query_selector('button[aria-label*="Sort"]')
@@ -320,20 +342,23 @@ class GoogleMapsScraper:
                 await human_click(page, sort_btn)
                 await asyncio.sleep(0.7)
                 for item_sel in ('[role="menuitemradio"]', '[role="option"]', 'li'):
-                    items = await page.query_selector_all(item_sel)
-                    for item in items:
-                        text = (await item.inner_text()).strip().lower()
-                        if text in ("newest", "most recent"):
-                            await human_click(page, item)
-                            await asyncio.sleep(1.5)
-                            break
+                    menu_items = await page.query_selector_all(item_sel)
+                    for mi in menu_items:
+                        try:
+                            text = (await mi.inner_text()).strip().lower()
+                            if text in ("newest", "most recent"):
+                                await human_click(page, mi)
+                                await asyncio.sleep(1.5)
+                                break
+                        except Exception:
+                            pass
                     else:
                         continue
                     break
 
             # ── Locate the scrollable review pane ─────────────────────────────
             pane = None
-            for ps in ('div.m6QErb[aria-label]', 'div[role="feed"]'):
+            for ps in ('div.m6QErb[aria-label]', 'div[role="feed"]', 'div.m6QErb'):
                 pane = await page.query_selector(ps)
                 if pane:
                     break
@@ -341,8 +366,9 @@ class GoogleMapsScraper:
             # ── Scroll and collect ────────────────────────────────────────────
             seen: set = set()
             stalls = 0
-            while len(reviews) < max_reviews and stalls < 4:
-                # Expand any "More" links so we get full review text
+
+            while len(reviews) < max_reviews and stalls < 6:
+                # Expand truncated review text
                 for more_btn in await page.query_selector_all('button[aria-label="See more"]'):
                     try:
                         if await more_btn.is_visible():
@@ -350,13 +376,38 @@ class GoogleMapsScraper:
                     except Exception:
                         pass
 
-                items = await page.query_selector_all('[data-review-id]')
+                # Try multiple card selectors — Google occasionally drops data-review-id
+                items = []
+                for rs in ('[data-review-id]', '.jftiEf', '[jslog*="review"]'):
+                    items = await page.query_selector_all(rs)
+                    if items:
+                        break
+
                 added = 0
                 for item in items:
                     if len(reviews) >= max_reviews:
                         break
+
+                    # Build a stable unique key for deduplication using whatever
+                    # attribute is available — the previous bug was that data-review-id
+                    # returns None on some pages, and None in seen == False, so every
+                    # item looked new but then None was added to seen, blocking all
+                    # subsequent items on the next scroll pass.
                     rid = await item.get_attribute("data-review-id")
-                    if not rid or rid in seen:
+                    if not rid:
+                        rid = await item.get_attribute("data-key")
+                    if not rid:
+                        rid = await item.get_attribute("jslog")
+                    if not rid:
+                        try:
+                            rid = await page.evaluate(
+                                "el => el.innerHTML.slice(0,120)", item
+                            )
+                        except Exception:
+                            rid = None
+                    if rid is None:
+                        continue   # truly can't identify this item — skip
+                    if rid in seen:
                         continue
                     seen.add(rid)
                     added += 1
@@ -364,7 +415,8 @@ class GoogleMapsScraper:
                     r: dict = {}
 
                     # Reviewer name
-                    for ns in ('[class*="d4r55"]', 'button[jsaction*="reviewAuthor"]'):
+                    for ns in ('[class*="d4r55"]', 'button[jsaction*="reviewAuthor"]',
+                               'a[href*="maps/contrib"]', '[class*="X43Kjb"]'):
                         try:
                             el = await item.query_selector(ns)
                             if el:
@@ -375,18 +427,21 @@ class GoogleMapsScraper:
                         except Exception:
                             pass
 
-                    # Star rating
-                    try:
-                        star_el = await item.query_selector('[aria-label*="star"]')
-                        if star_el:
-                            lbl = await star_el.get_attribute("aria-label") or ""
-                            m = re.search(r"(\d+)\s+star", lbl, re.IGNORECASE)
-                            if m:
-                                r["stars"] = int(m.group(1))
-                    except Exception:
-                        pass
+                    # Stars
+                    for star_sel in ('[aria-label*="star"]', '[aria-label*="Star"]',
+                                     '[class*="kvMYJc"]'):
+                        try:
+                            el = await item.query_selector(star_sel)
+                            if el:
+                                lbl = await el.get_attribute("aria-label") or ""
+                                m = re.search(r"(\d+)\s+star", lbl, re.IGNORECASE)
+                                if m:
+                                    r["stars"] = int(m.group(1))
+                                    break
+                        except Exception:
+                            pass
 
-                    # Date — find a short span with relative time words
+                    # Date — short span with relative time words
                     try:
                         for span in await item.query_selector_all("span"):
                             t = (await span.inner_text()).strip()
@@ -400,7 +455,8 @@ class GoogleMapsScraper:
                         pass
 
                     # Review text
-                    for ts in ('[class*="wiI7pd"]', 'span[jscontroller]'):
+                    for ts in ('[class*="wiI7pd"]', 'span[jscontroller]',
+                               '[class*="MyEned"]'):
                         try:
                             el = await item.query_selector(ts)
                             if el:
@@ -411,7 +467,6 @@ class GoogleMapsScraper:
                         except Exception:
                             pass
                     if "text" not in r:
-                        # Fallback: longest span in the review card
                         best = ""
                         try:
                             for span in await item.query_selector_all("span"):
@@ -431,8 +486,11 @@ class GoogleMapsScraper:
                     await human_scroll(page, pane, 2000)
                     await asyncio.sleep(random.gauss(1.3, 0.3))
 
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"[REVIEWS] Error: {e}")
+
+        if not reviews:
+            self._log("[REVIEWS] None found — tab click or selectors may need updating")
 
         return reviews[:max_reviews]
 
