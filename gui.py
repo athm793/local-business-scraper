@@ -68,7 +68,11 @@ def _fmt_time(seconds: float) -> str:
     s = max(0, int(seconds))
     h, rem = divmod(s, 3600)
     m, s   = divmod(rem, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 
 # ── Column Mapper Dialog ────────────────────────────────────────────────────────
@@ -323,44 +327,41 @@ class StatCard(ctk.CTkFrame):
 
 
 class WorkerRow(ctk.CTkFrame):
+    """Compact card for the 5-column worker grid. Parent handles geometry placement."""
+
     def __init__(self, parent, wid: int):
         super().__init__(parent, fg_color=BG_CARD, corner_radius=8,
                          border_width=1, border_color=BD)
-        self.pack(fill="x", padx=12, pady=3)
+        # No self.pack/grid here — _rebuild_worker_rows places us in a 5-col grid
 
-        # Dot
-        self._dot = ctk.CTkLabel(self, text="●", font=ctk.CTkFont(size=10),
-                                  text_color=TX_MUT, width=18)
-        self._dot.grid(row=0, column=0, padx=(10, 4), pady=10)
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill="x", padx=8, pady=(6, 0))
 
-        # Worker label
-        ctk.CTkLabel(self, text=f"W{wid + 1}",
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color=TX_MUT, width=26).grid(
-            row=0, column=1, padx=(0, 8), pady=10)
+        self._dot = ctk.CTkLabel(hdr, text="●", font=ctk.CTkFont(size=8),
+                                  text_color=TX_MUT, width=12)
+        self._dot.pack(side="left")
 
-        # Location
+        ctk.CTkLabel(hdr, text=f"W{wid + 1}",
+                     font=ctk.CTkFont(size=9, weight="bold"),
+                     text_color=TX_MUT).pack(side="left", padx=(2, 0))
+
+        self._badge = ctk.CTkLabel(hdr, text="Idle",
+                                    font=ctk.CTkFont(size=9), text_color=TX_MUT)
+        self._badge.pack(side="right")
+
         self._loc = ctk.CTkLabel(self, text="Idle",
-                                  font=ctk.CTkFont(size=12), text_color=TX,
-                                  anchor="w", width=230)
-        self._loc.grid(row=0, column=2, padx=(0, 12), pady=10, sticky="w")
+                                  font=ctk.CTkFont(size=9), text_color=TX_MUT,
+                                  anchor="w")
+        self._loc.pack(fill="x", padx=8, pady=(2, 0))
 
-        # Progress bar
-        self._bar = ctk.CTkProgressBar(self, width=160, height=6,
-                                        corner_radius=3, progress_color=AC_GREEN)
-        self._bar.grid(row=0, column=3, padx=(0, 10), pady=10)
+        self._bar = ctk.CTkProgressBar(self, height=4, corner_radius=2,
+                                        progress_color=AC_GREEN)
+        self._bar.pack(fill="x", padx=8, pady=(3, 0))
         self._bar.set(0)
 
-        # Count
         self._count = ctk.CTkLabel(self, text="",
-                                    font=ctk.CTkFont(size=11), text_color=TX_MUT, width=72)
-        self._count.grid(row=0, column=4, padx=(0, 8), pady=10)
-
-        # Status badge
-        self._badge = ctk.CTkLabel(self, text="Idle",
-                                    font=ctk.CTkFont(size=10),
-                                    text_color=TX_MUT, width=68)
-        self._badge.grid(row=0, column=5, padx=(0, 10), pady=10)
+                                    font=ctk.CTkFont(size=9), text_color=TX_MUT)
+        self._count.pack(pady=(2, 6))
 
     def update(self, s: dict):
         state   = s.get("state", "idle")
@@ -369,26 +370,27 @@ class WorkerRow(ctk.CTkFrame):
         total   = s.get("total", 0)
         color   = STATE_COLORS.get(state, TX_MUT)
 
+        loc_text = (loc[:21] + "…") if len(loc) > 22 else loc
         self._dot.configure(text_color=color)
-        self._loc.configure(text=loc or "Idle")
+        self._loc.configure(text=loc_text or "Idle",
+                            text_color=TX if state == "running" else TX_MUT)
         self._bar.set(current / total if total else 0)
         self._bar.configure(progress_color=color)
-        self._count.configure(text=f"{current:,} / {total:,}" if total else "")
+        self._count.configure(
+            text=f"{current:,} / {total:,}" if total else "",
+            text_color=TX_MUT,
+        )
         self._badge.configure(text=state.title(), text_color=color)
 
 
 class LocationChip(ctk.CTkFrame):
-    def __init__(self, parent, text: str, on_remove):
+    def __init__(self, parent, text: str):
         super().__init__(parent, fg_color=BG_CARD, corner_radius=6,
                          border_width=1, border_color=BD)
         self.pack(fill="x", padx=0, pady=2)
         ctk.CTkLabel(self, text=text,
                      font=ctk.CTkFont(size=11), text_color=TX,
-                     anchor="w").pack(side="left", padx=(10, 4), pady=6, expand=True, fill="x")
-        ctk.CTkButton(self, text="×", width=22, height=22,
-                      fg_color="transparent", hover_color=BD,
-                      font=ctk.CTkFont(size=13), text_color=TX_MUT,
-                      command=on_remove).pack(side="right", padx=6, pady=4)
+                     anchor="w").pack(padx=(10, 10), pady=5, fill="x")
 
 
 # ── Main App ───────────────────────────────────────────────────────────────────
@@ -397,9 +399,10 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Maps Scraper")
-        self.geometry("1120x740")
-        self.minsize(820, 560)
+        self.geometry("1120x680")
+        self.minsize(820, 480)
         self.configure(fg_color=BG_APP)
+        self.wm_attributes('-topmost', True)    # stay above Chrome worker windows
 
         self._q:            queue.Queue   = queue.Queue()
         self._stop_event =  threading.Event()
@@ -630,18 +633,13 @@ class App(ctk.CTk):
         ctrl.grid(row=7, column=0, sticky="ew", padx=16, pady=(10, 16))
         ctrl.grid_columnconfigure(0, weight=1)
 
-        # Estimate
-        self._est_label = ctk.CTkLabel(ctrl, text="",
-                                        font=ctk.CTkFont(size=10), text_color=TX_MUT)
-        self._est_label.grid(row=0, column=0, pady=(0, 6), sticky="w")
-
         self._start_btn = ctk.CTkButton(
             ctrl, text="Start scraping", height=42,
             fg_color=BTN_GRN, hover_color=BTN_GRN_H,
             font=ctk.CTkFont(size=13, weight="bold"), text_color=TX,
             command=self._start,
         )
-        self._start_btn.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        self._start_btn.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
         self._stop_btn = ctk.CTkButton(
             ctrl, text="Stop", height=36,
@@ -649,13 +647,13 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=12), text_color=TX,
             state="disabled", command=self._stop,
         )
-        self._stop_btn.grid(row=2, column=0, sticky="ew")
+        self._stop_btn.grid(row=1, column=0, sticky="ew")
 
         # Output file label
         self._out_label = ctk.CTkLabel(ctrl, text="",
                                         font=ctk.CTkFont(size=10), text_color=AC_BLUE,
                                         cursor="hand2", wraplength=260, justify="left")
-        self._out_label.grid(row=3, column=0, pady=(10, 0), sticky="w")
+        self._out_label.grid(row=2, column=0, pady=(10, 0), sticky="w")
         self._out_label.bind("<Button-1>", lambda _: self._open_folder())
 
     # ── MAIN PANEL ─────────────────────────────────────────────────────────────
@@ -698,11 +696,8 @@ class App(ctk.CTk):
                                        font=ctk.CTkFont(size=10), text_color=TX_MUT)
         self._loc_prog.pack(side="right", padx=16)
 
-        self._workers_wrap = ctk.CTkScrollableFrame(
-            w_outer, fg_color="transparent", height=158,
-            scrollbar_button_color=BD, scrollbar_button_hover_color=TX_MUT,
-        )
-        self._workers_wrap.pack(fill="x", padx=4, pady=(0, 10))
+        self._workers_wrap = ctk.CTkFrame(w_outer, fg_color="transparent")
+        self._workers_wrap.pack(fill="x", padx=4, pady=(0, 8))
 
         ctk.CTkFrame(main, height=1, fg_color=BD, corner_radius=0).grid(
             row=1, column=0, sticky="sew")
@@ -785,7 +780,6 @@ class App(ctk.CTk):
         n = int(round(value))
         self._workers_val_label.configure(text=str(n))
         self._rebuild_worker_rows()
-        self._update_estimate()
 
     def _on_reviews_toggle(self):
         state = "normal" if self._reviews_var.get() else "disabled"
@@ -796,8 +790,13 @@ class App(ctk.CTk):
             r.destroy()
         self._worker_rows.clear()
         n = self._get_workers()
+        ncols = 5
+        for c in range(ncols):
+            self._workers_wrap.grid_columnconfigure(c, weight=1)
         for i in range(n):
-            self._worker_rows.append(WorkerRow(self._workers_wrap, i))
+            card = WorkerRow(self._workers_wrap, i)
+            card.grid(row=i // ncols, column=i % ncols, padx=4, pady=4, sticky="nsew")
+            self._worker_rows.append(card)
 
     # ── Location management ───────────────────────────────────────────────────
 
@@ -813,7 +812,6 @@ class App(ctk.CTk):
     def _on_import(self, locations: list):
         self._locations = locations
         self._refresh_chips()
-        self._update_estimate()
         self._log_line(f"Loaded {len(locations):,} locations from CSV", "success")
 
     def _add_manual(self):
@@ -826,18 +824,10 @@ class App(ctk.CTk):
         self._locations.append({"location": text, "city": "", "state": "", "country": ""})
         self._manual_entry.delete(0, "end")
         self._refresh_chips()
-        self._update_estimate()
-
-    def _remove_location(self, idx: int):
-        if 0 <= idx < len(self._locations):
-            self._locations.pop(idx)
-            self._refresh_chips()
-            self._update_estimate()
 
     def _clear_locations(self):
         self._locations.clear()
         self._refresh_chips()
-        self._update_estimate()
 
     def _refresh_chips(self):
         for w in self._chip_frame.winfo_children():
@@ -846,37 +836,13 @@ class App(ctk.CTk):
         self._loc_count.configure(
             text=f"{n:,} location{'s' if n != 1 else ''} loaded" if n else "No locations added"
         )
-        for i, loc in enumerate(self._locations[:MAX_LOC_SHOWN]):
-            idx = i
-            LocationChip(self._chip_frame, loc["location"],
-                         on_remove=lambda i=idx: self._remove_location(i))
+        for loc in self._locations[:MAX_LOC_SHOWN]:
+            LocationChip(self._chip_frame, loc["location"])
         if n > MAX_LOC_SHOWN:
             ctk.CTkLabel(self._chip_frame,
                          text=f"+ {n - MAX_LOC_SHOWN:,} more not shown",
                          font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(
                 anchor="w", padx=4, pady=4)
-
-    def _update_estimate(self, *_):
-        n   = len(self._locations) or (1 if self._manual_entry.get().strip() else 0)
-        try:
-            depth = int(self._depth_entry.get() or "100")
-        except ValueError:
-            depth = 100
-        workers  = self._get_workers()
-        avg_sec  = 5
-        total    = n * depth * avg_sec / max(workers, 1)
-        if n == 0:
-            self._est_label.configure(text="")
-            return
-        if total < 60:
-            t = f"~{int(total)}s"
-        elif total < 3600:
-            t = f"~{int(total / 60)} min"
-        else:
-            t = f"~{total / 3600:.1f} h"
-        self._est_label.configure(
-            text=f"Est. {t}  ·  {n:,} location{'s' if n != 1 else ''}  ·  {workers} worker{'s' if workers != 1 else ''}"
-        )
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
