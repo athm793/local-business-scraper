@@ -18,11 +18,27 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 from db import Database
 from stealth import apply_stealth, human_click, human_scroll, maybe_idle, is_blocked, handle_block
+
+
+_SOCIAL_DOMAINS = frozenset({
+    "facebook.com", "fb.com", "instagram.com", "twitter.com", "x.com",
+    "linkedin.com", "tiktok.com", "youtube.com", "pinterest.com",
+    "snapchat.com", "reddit.com", "whatsapp.com", "telegram.org", "vk.com",
+})
+_DIRECTORY_DOMAINS = frozenset({
+    "yelp.com", "yellowpages.com", "tripadvisor.com", "angi.com",
+    "angieslist.com", "bbb.org", "houzz.com", "thumbtack.com",
+    "homeadvisor.com", "manta.com", "mapquest.com", "whitepages.com",
+    "superpages.com", "foursquare.com", "merchantcircle.com",
+    "expertise.com", "porch.com", "bark.com", "citysearch.com",
+    "local.com", "chamberofcommerce.com",
+})
 
 
 async def delay(min_s: float = 2.0, max_s: float = 5.0):
@@ -54,6 +70,9 @@ class GoogleMapsScraper:
         stop_event: Optional[threading.Event] = None,
         extra_data: Optional[dict] = None,
         review_depth: int = 0,
+        filters: Optional[dict] = None,
+        scrape_hours: bool = False,
+        scrape_schedule: bool = False,
     ):
         self.keyword = keyword
         self.location = location
@@ -66,6 +85,9 @@ class GoogleMapsScraper:
         self._stop_event = stop_event
         self._extra_data = extra_data or {}
         self.review_depth = review_depth
+        self._filters = filters or {}
+        self.scrape_hours = scrape_hours
+        self.scrape_schedule = scrape_schedule
 
     def _log(self, msg: str):
         self._log_fn(msg)
@@ -246,10 +268,16 @@ class GoogleMapsScraper:
                         continue
                     return None
                 data = await self._extract(page)
-                if data and self.review_depth > 0:
-                    self._log(f"Scraping up to {self.review_depth} reviews...")
-                    reviews = await self._scrape_reviews(page, self.review_depth)
-                    data["reviews"] = json.dumps(reviews, ensure_ascii=False)
+                if data:
+                    if self.scrape_schedule:
+                        data["schedule"] = await self._scrape_schedule(page)
+                    if not self._passes_filters(data):
+                        self._log(f"[FILTER] Skipped: {data.get('name', '')}")
+                        return None
+                    if self.review_depth > 0:
+                        self._log(f"Scraping up to {self.review_depth} reviews...")
+                        reviews = await self._scrape_reviews(page, self.review_depth)
+                        data["reviews"] = json.dumps(reviews, ensure_ascii=False)
                 return data
             except Exception as e:
                 if attempt == 0:
@@ -394,6 +422,79 @@ class GoogleMapsScraper:
 
         return reviews[:max_reviews]
 
+    def _passes_filters(self, data: dict) -> bool:
+        """Return True if data satisfies all active filters."""
+        f = self._filters
+        if not f:
+            return True
+        rc  = data.get("review_count") or 0
+        rat = data.get("rating") or 0.0
+        if (v := f.get("min_reviews")) is not None and rc < v:
+            return False
+        if (v := f.get("max_reviews")) is not None and rc > v:
+            return False
+        if (v := f.get("min_rating")) is not None and rat < v:
+            return False
+        if (v := f.get("max_rating")) is not None and rat > v:
+            return False
+        if (v := f.get("require_website")) is not None:
+            has = bool((data.get("website") or "").strip())
+            if v and not has:
+                return False
+            if not v and has:
+                return False
+        if (v := f.get("require_phone")) is not None:
+            has = bool((data.get("phone") or "").strip())
+            if v and not has:
+                return False
+            if not v and has:
+                return False
+        return True
+
+    @staticmethod
+    def _classify_website(url: str) -> str:
+        """Return Legit Website / Social Media Page / Yellow Pages Link / No Website."""
+        if not url or not url.strip():
+            return "No Website"
+        try:
+            domain = urlparse(url).netloc.lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+            if any(s in domain for s in _SOCIAL_DOMAINS):
+                return "Social Media Page"
+            if any(d in domain for d in _DIRECTORY_DOMAINS):
+                return "Yellow Pages Link"
+            return "Legit Website"
+        except Exception:
+            return "Legit Website"
+
+    async def _scrape_schedule(self, page) -> str:
+        """Click the hours element and return the full weekly schedule text."""
+        try:
+            for sel in (
+                '[data-item-id="oh"] button',
+                '[data-item-id="oh"]',
+                'button[jsaction*="openhours"]',
+            ):
+                btn = await page.query_selector(sel)
+                if btn and await btn.is_visible():
+                    await human_click(page, btn)
+                    await asyncio.sleep(1.2)
+                    for sched_sel in ('table.eK4R0e', 'div.eK4R0e', '[data-day-of-week]'):
+                        el = await page.query_selector(sched_sel)
+                        if el:
+                            return self._clean_text(await el.inner_text())
+                    # Fallback: read any aria-expanded container
+                    exp = await page.query_selector('[aria-expanded="true"]')
+                    if exp:
+                        text = self._clean_text(await exp.inner_text())
+                        if len(text) > 20:
+                            return text
+                    break
+        except Exception:
+            pass
+        return ""
+
     @staticmethod
     def _clean_text(text: str) -> str:
         """Strip leading Google Maps icon characters from inner_text() results.
@@ -426,11 +527,23 @@ class GoogleMapsScraper:
         data["place_url"] = page.url
         data["scraped_at"] = datetime.now().isoformat()
 
-        # Rating + review count — Google Maps sometimes puts both in one element's
-        # aria-label (e.g. "4.5 stars 1,607 reviews"), so probe both selectors and
-        # extract whichever fields haven't been filled yet.
+        # ── Rating + review count ─────────────────────────────────────────────
+        # Strategy 1: specific rating-number spans (inner text = "4.5")
         try:
-            for sel in ('[aria-label*="star"]', '[aria-label*="review"]'):
+            for sel in ("span.MW4etd", "span.ceNzKf", "span.Aq14fc"):
+                el = await page.query_selector(sel)
+                if el:
+                    t = (await el.inner_text()).strip()
+                    if re.match(r"^\d+\.\d$", t):
+                        data["rating"] = float(t)
+                        break
+        except Exception:
+            pass
+
+        # Strategy 2: aria-label on star/review elements
+        try:
+            for sel in ('[aria-label*="star"]', '[aria-label*="Star"]',
+                        '[aria-label*="review"]'):
                 el = await page.query_selector(sel)
                 if not el:
                     continue
@@ -450,6 +563,25 @@ class GoogleMapsScraper:
         except Exception:
             pass
 
+        # Strategy 3: body-text fallback — "4.5(1,607 reviews)" is always visible
+        try:
+            if "rating" not in data or "review_count" not in data:
+                body = (await page.inner_text("body"))[:6000]
+                if "rating" not in data:
+                    m_r = re.search(r"\b(\d\.\d)\s*[\(\n]([\d,]+)\s*review", body,
+                                    re.IGNORECASE)
+                    if m_r:
+                        data["rating"] = float(m_r.group(1))
+                        if "review_count" not in data:
+                            data["review_count"] = int(m_r.group(2).replace(",", ""))
+                if "review_count" not in data:
+                    m_c = re.search(r"([\d,]+)\s+reviews?", body, re.IGNORECASE)
+                    if m_c:
+                        data["review_count"] = int(m_c.group(1).replace(",", ""))
+        except Exception:
+            pass
+
+        # ── Category ─────────────────────────────────────────────────────────
         try:
             el = await page.query_selector("button.DkEaL")
             if el:
@@ -457,6 +589,7 @@ class GoogleMapsScraper:
         except Exception:
             pass
 
+        # ── Address ───────────────────────────────────────────────────────────
         try:
             el = await page.query_selector('[data-item-id="address"]')
             if not el:
@@ -466,6 +599,7 @@ class GoogleMapsScraper:
         except Exception:
             pass
 
+        # ── Phone ─────────────────────────────────────────────────────────────
         try:
             el = await page.query_selector('[data-item-id^="phone"]')
             if not el:
@@ -475,6 +609,7 @@ class GoogleMapsScraper:
         except Exception:
             pass
 
+        # ── Website + classification ──────────────────────────────────────────
         try:
             el = await page.query_selector(
                 'a[data-item-id="authority"], [data-item-id="authority"] a'
@@ -484,6 +619,21 @@ class GoogleMapsScraper:
                 data["website"] = href or (await el.inner_text()).strip()
         except Exception:
             pass
+        data["website_type"] = self._classify_website(data.get("website", ""))
+
+        # ── Hours (current status) ────────────────────────────────────────────
+        if self.scrape_hours or self.scrape_schedule:
+            try:
+                for sel in ('[data-item-id="oh"]', 'button[aria-label*="hour" i]',
+                            '[jsaction*="openhours"]'):
+                    el = await page.query_selector(sel)
+                    if el:
+                        text = self._clean_text(await el.inner_text())
+                        if text:
+                            data["hours"] = text
+                            break
+            except Exception:
+                pass
 
         return data
 

@@ -7,7 +7,8 @@ from pathlib import Path
 class Database:
     COLUMNS = [
         "place_url", "name", "category", "address", "phone",
-        "website", "rating", "review_count", "latitude", "longitude",
+        "website", "website_type", "rating", "review_count",
+        "hours", "schedule", "latitude", "longitude",
         "keyword", "location", "city", "state", "country", "scraped_at",
         "reviews",
     ]
@@ -43,12 +44,16 @@ class Database:
                     state        TEXT,
                     country      TEXT,
                     scraped_at   TEXT,
-                    reviews      TEXT
+                    reviews      TEXT,
+                    website_type TEXT,
+                    hours        TEXT,
+                    schedule     TEXT
                 )
             """)
-            # Migrate older schemas that are missing columns
+            # Migrate older schemas
             existing = {row[1] for row in conn.execute("PRAGMA table_info(businesses)")}
-            for col in ("city", "state", "country", "reviews"):
+            for col in ("city", "state", "country", "reviews",
+                        "website_type", "hours", "schedule"):
                 if col not in existing:
                     conn.execute(f"ALTER TABLE businesses ADD COLUMN {col} TEXT")
 

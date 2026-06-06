@@ -57,6 +57,9 @@ class ScraperPool:
         headless: bool = False,
         record_tick_fn: Optional[Callable[[], None]] = None,
         review_depth: int = 0,
+        filters: Optional[dict] = None,
+        scrape_hours: bool = False,
+        scrape_schedule: bool = False,
     ):
         self.keyword = keyword
         self.locations = locations
@@ -71,6 +74,9 @@ class ScraperPool:
         self._stop_event = stop_event
         self.headless = headless
         self.review_depth = review_depth
+        self.filters = filters or {}
+        self.scrape_hours = scrape_hours
+        self.scrape_schedule = scrape_schedule
         self._completed_locations = 0
 
     async def run(self):
@@ -155,6 +161,9 @@ class ScraperPool:
                     record_fn=make_record(loc_data),
                     stop_event=self._stop_event,
                     review_depth=self.review_depth,
+                    filters=self.filters,
+                    scrape_hours=self.scrape_hours,
+                    scrape_schedule=self.scrape_schedule,
                 )
                 await scraper._run(page)
 

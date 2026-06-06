@@ -8,9 +8,9 @@ from pathlib import Path
 
 COLUMNS = [
     "keyword", "location", "city", "state", "country",
-    "name", "category", "address", "phone", "website",
-    "rating", "review_count", "latitude", "longitude",
-    "place_url", "scraped_at", "reviews",
+    "name", "category", "address", "phone", "website", "website_type",
+    "rating", "review_count", "hours", "schedule",
+    "latitude", "longitude", "place_url", "scraped_at", "reviews",
 ]
 
 

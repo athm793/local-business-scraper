@@ -402,7 +402,6 @@ class App(ctk.CTk):
         self.geometry("1120x680")
         self.minsize(820, 480)
         self.configure(fg_color=BG_APP)
-        self.wm_attributes('-topmost', True)    # stay above Chrome worker windows
 
         self._q:            queue.Queue   = queue.Queue()
         self._stop_event =  threading.Event()
@@ -566,6 +565,70 @@ class App(ctk.CTk):
         ctk.CTkLabel(rev_row, text="per biz",
                      font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(
             side="right", padx=(8, 2))
+
+        # Hours row: two checkboxes side by side
+        hrs_row = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        hrs_row.pack(fill="x", padx=16, pady=(0, 8))
+        self._hours_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(hrs_row, text="Scrape hours",
+                        variable=self._hours_var,
+                        font=ctk.CTkFont(size=11), text_color=TX_MUT,
+                        checkbox_width=18, checkbox_height=18).pack(side="left")
+        self._schedule_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(hrs_row, text="Full schedule",
+                        variable=self._schedule_var,
+                        font=ctk.CTkFont(size=11), text_color=TX_MUT,
+                        checkbox_width=18, checkbox_height=18).pack(side="right")
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        section_label(cfg_frame, "FILTERS  (skip non-matching businesses)")
+
+        rev_f = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        rev_f.pack(fill="x", padx=16, pady=(0, 5))
+        ctk.CTkLabel(rev_f, text="Reviews", width=52,
+                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(side="left")
+        self._filter_min_rev = ctk.CTkEntry(rev_f, width=62, height=28,
+            placeholder_text="min", fg_color=BG_INPUT, border_color=BD,
+            font=ctk.CTkFont(size=11), text_color=TX)
+        self._filter_min_rev.pack(side="left", padx=(4, 2))
+        ctk.CTkLabel(rev_f, text="–",
+                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(side="left")
+        self._filter_max_rev = ctk.CTkEntry(rev_f, width=62, height=28,
+            placeholder_text="max", fg_color=BG_INPUT, border_color=BD,
+            font=ctk.CTkFont(size=11), text_color=TX)
+        self._filter_max_rev.pack(side="left", padx=(2, 0))
+
+        rat_f = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        rat_f.pack(fill="x", padx=16, pady=(0, 5))
+        ctk.CTkLabel(rat_f, text="Rating", width=52,
+                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(side="left")
+        self._filter_min_rat = ctk.CTkEntry(rat_f, width=62, height=28,
+            placeholder_text="min", fg_color=BG_INPUT, border_color=BD,
+            font=ctk.CTkFont(size=11), text_color=TX)
+        self._filter_min_rat.pack(side="left", padx=(4, 2))
+        ctk.CTkLabel(rat_f, text="–",
+                     font=ctk.CTkFont(size=11), text_color=TX_MUT).pack(side="left")
+        self._filter_max_rat = ctk.CTkEntry(rat_f, width=62, height=28,
+            placeholder_text="max", fg_color=BG_INPUT, border_color=BD,
+            font=ctk.CTkFont(size=11), text_color=TX)
+        self._filter_max_rat.pack(side="left", padx=(2, 0))
+
+        wp_f = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        wp_f.pack(fill="x", padx=16, pady=(0, 10))
+        ctk.CTkLabel(wp_f, text="Website",
+                     font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(side="left")
+        self._filter_website = ctk.CTkOptionMenu(
+            wp_f, values=["Any", "Must have", "Must not have"],
+            width=108, height=26, fg_color=BG_CARD, button_color=BD,
+            dropdown_fg_color=BG_CARD, font=ctk.CTkFont(size=10))
+        self._filter_website.pack(side="left", padx=(4, 10))
+        ctk.CTkLabel(wp_f, text="Phone",
+                     font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(side="left")
+        self._filter_phone = ctk.CTkOptionMenu(
+            wp_f, values=["Any", "Must have", "Must not have"],
+            width=108, height=26, fg_color=BG_CARD, button_color=BD,
+            dropdown_fg_color=BG_CARD, font=ctk.CTkFont(size=10))
+        self._filter_phone.pack(side="left", padx=(4, 0))
 
         ctk.CTkFrame(sb, height=1, fg_color=BD).grid(
             row=4, column=0, sticky="ew", padx=0, pady=(4, 0))
@@ -875,6 +938,32 @@ class App(ctk.CTk):
             except ValueError:
                 review_depth = 10
 
+        # Build filters dict (only populated entries become active filters)
+        filters: dict = {}
+        def _int(entry): return int(v) if (v := entry.get().strip()) else None
+        def _flt(entry): return float(v) if (v := entry.get().strip()) else None
+        if (v := _int(self._filter_min_rev)) is not None:
+            filters["min_reviews"] = v
+        if (v := _int(self._filter_max_rev)) is not None:
+            filters["max_reviews"] = v
+        if (v := _flt(self._filter_min_rat)) is not None:
+            filters["min_rating"] = v
+        if (v := _flt(self._filter_max_rat)) is not None:
+            filters["max_rating"] = v
+        web_val = self._filter_website.get()
+        if web_val == "Must have":
+            filters["require_website"] = True
+        elif web_val == "Must not have":
+            filters["require_website"] = False
+        ph_val = self._filter_phone.get()
+        if ph_val == "Must have":
+            filters["require_phone"] = True
+        elif ph_val == "Must not have":
+            filters["require_phone"] = False
+
+        scrape_hours    = self._hours_var.get()
+        scrape_schedule = self._schedule_var.get()
+
         self._save_config()
 
         # Create output CSV
@@ -923,6 +1012,9 @@ class App(ctk.CTk):
             record_tick_fn=lambda: self._q.put(("record_tick",)),
             stop_event=self._stop_event, headless=headless,
             review_depth=review_depth,
+            filters=filters,
+            scrape_hours=scrape_hours,
+            scrape_schedule=scrape_schedule,
         )
 
         def run():
