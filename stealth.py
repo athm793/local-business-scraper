@@ -14,6 +14,7 @@ Layers applied:
 import asyncio
 import math
 import random
+import weakref
 
 # ── Fingerprint pools ─────────────────────────────────────────────────────────
 
@@ -189,8 +190,17 @@ async def maybe_idle():
 
 # ── Mouse movement ────────────────────────────────────────────────────────────
 
-_mouse_x: float = 400.0
-_mouse_y: float = 300.0
+# Per-page mouse state — WeakKeyDictionary so entries are GC'd with the page object.
+# Module-level globals would be shared across all workers, corrupting bezier origins.
+_mouse_state: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _get_mouse(page) -> tuple[float, float]:
+    return _mouse_state.get(page, (400.0, 300.0))
+
+
+def _set_mouse(page, x: float, y: float) -> None:
+    _mouse_state[page] = (x, y)
 
 
 def _cubic_bezier(t: float, p0, cp1, cp2, p1) -> float:
@@ -205,8 +215,7 @@ def _cubic_bezier(t: float, p0, cp1, cp2, p1) -> float:
 
 async def human_move(page, tx: float, ty: float):
     """Move mouse from current position to (tx, ty) along a bezier curve."""
-    global _mouse_x, _mouse_y
-    sx, sy = _mouse_x, _mouse_y
+    sx, sy = _get_mouse(page)
 
     dx, dy = tx - sx, ty - sy
     dist   = math.hypot(dx, dy) or 1
@@ -239,7 +248,7 @@ async def human_move(page, tx: float, ty: float):
         step_delay = 0.008 + edge_dist * 0.025
         await asyncio.sleep(step_delay)
 
-    _mouse_x, _mouse_y = tx, ty
+    _set_mouse(page, tx, ty)
 
 
 async def human_click(page, element=None, x: float = None, y: float = None):
@@ -298,14 +307,22 @@ async def is_blocked(page) -> bool:
         return False
 
 
-async def handle_block(page, log_fn, location: str) -> bool:
+async def handle_block(page, log_fn, location: str, stop_event=None) -> bool:
     """
     Called when a block is detected.
     Waits, navigates to Google homepage, then returns True if we should retry
-    or False if still blocked after cooldown.
+    or False if still blocked after cooldown (or if stop was requested).
     """
-    log_fn(f"[BLOCK] CAPTCHA/block on '{location}' — cooling down 90s...")
-    await asyncio.sleep(random.uniform(80, 110))
+    cooldown = random.uniform(80, 110)
+    log_fn(f"[BLOCK] CAPTCHA/block on '{location}' — cooling down {cooldown:.0f}s...")
+    elapsed = 0.0
+    while elapsed < cooldown:
+        if stop_event is not None and stop_event.is_set():
+            log_fn("[BLOCK] Cooldown interrupted by stop request")
+            return False
+        chunk = min(5.0, cooldown - elapsed)
+        await asyncio.sleep(chunk)
+        elapsed += chunk
 
     # Visit Google home to reset session state
     try:

@@ -976,7 +976,7 @@ class App(ctk.CTk):
                 tag = "success"
             elif text.startswith("[W") or "W1]" in text or "W2]" in text:
                 tag = "worker"
-            elif "[STOP]" in text or "[RESUME]" in text:
+            elif "[STOP]" in text or "[RESUME]" in text or "[BLOCK]" in text:
                 tag = "warn"
             else:
                 tag = "normal"

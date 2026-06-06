@@ -115,7 +115,7 @@ class GoogleMapsScraper:
             pass
 
         if await is_blocked(page):
-            if not await handle_block(page, self._log, self.location):
+            if not await handle_block(page, self._log, self.location, self._stop_event):
                 return
             await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
             try:
@@ -231,7 +231,7 @@ class GoogleMapsScraper:
                 await page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 await delay(2, 4)
                 if await is_blocked(page):
-                    if not await handle_block(page, self._log, url):
+                    if not await handle_block(page, self._log, url, self._stop_event):
                         return None
                     await page.goto(url, wait_until="domcontentloaded", timeout=20000)
                     await delay(2, 4)
