@@ -54,7 +54,6 @@ class ScraperPool:
         worker_status_fn: Callable[[int, dict], None],
         overall_progress_fn: Callable[[int, int, int], None],
         stop_event: threading.Event,
-        headless: bool = False,
         record_tick_fn: Optional[Callable[[], None]] = None,
         review_depth: int = 0,
         filters: Optional[dict] = None,
@@ -72,7 +71,6 @@ class ScraperPool:
         self._overall_progress = overall_progress_fn
         self._record_tick = record_tick_fn
         self._stop_event = stop_event
-        self.headless = headless
         self.review_depth = review_depth
         self.filters = filters or {}
         self.scrape_hours = scrape_hours
@@ -104,7 +102,7 @@ class ScraperPool:
 
         ctx = await p.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
-            headless=self.headless,
+            headless=False,
             viewport=random_viewport(),
             args=["--disable-blink-features=AutomationControlled"],
             user_agent=random_user_agent(),

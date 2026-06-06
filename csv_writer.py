@@ -22,13 +22,15 @@ class CsvWriter:
 
     def _init_file(self):
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.filepath, "w", newline="", encoding="utf-8") as f:
+        # utf-8-sig writes the UTF-8 BOM so Excel opens the file with the
+        # correct encoding and doesn't mangle Unicode characters in hours/text.
+        with open(self.filepath, "w", newline="", encoding="utf-8-sig") as f:
             csv.DictWriter(f, fieldnames=COLUMNS).writeheader()
 
     def append(self, data: dict):
         row = {col: data.get(col, "") for col in COLUMNS}
         with self._lock:
-            with open(self.filepath, "a", newline="", encoding="utf-8") as f:
+            with open(self.filepath, "a", newline="", encoding="utf-8-sig") as f:
                 csv.DictWriter(f, fieldnames=COLUMNS).writerow(row)
 
     @staticmethod

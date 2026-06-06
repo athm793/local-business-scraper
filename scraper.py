@@ -99,6 +99,19 @@ class GoogleMapsScraper:
     def _stopped(self) -> bool:
         return self._stop_event is not None and self._stop_event.is_set()
 
+    async def _stoppable_delay(self, min_s: float, max_s: float):
+        """Like delay() but checks stop_event every 0.5 s so Stop responds quickly."""
+        mean = (min_s + max_s) / 2
+        std  = (max_s - min_s) / 6
+        t = max(min_s, min(max_s, random.gauss(mean, std)))
+        elapsed = 0.0
+        while elapsed < t:
+            if self._stopped():
+                return
+            chunk = min(0.5, t - elapsed)
+            await asyncio.sleep(chunk)
+            elapsed += chunk
+
     async def run(self):
         """Standalone entry point — creates its own browser context."""
         profile_dir = Path("browser_profile").resolve()
@@ -184,8 +197,9 @@ class GoogleMapsScraper:
                 self._log(f"[{scraped_count}/{self.depth}] {data.get('name', 'Unknown')}")
                 self._progress(scraped_count, self.depth)
 
-            await maybe_idle()
-            await delay(3, 8)
+            if not self._stopped():
+                await maybe_idle()
+                await self._stoppable_delay(3, 8)
 
         self._log(f"Done: {scraped_count} records for {self.location}")
 
@@ -229,7 +243,7 @@ class GoogleMapsScraper:
             scrolled, end_reached = await self._scroll_feed(page)
             if end_reached or not scrolled:
                 break
-            await delay(1.5, 3)
+            await self._stoppable_delay(1.5, 3)
 
         return urls[: self.depth]
 
@@ -469,39 +483,72 @@ class GoogleMapsScraper:
             return "Legit Website"
 
     async def _scrape_schedule(self, page) -> str:
-        """Click the hours element and return the full weekly schedule text."""
+        """Return the full weekly schedule text for the current business page."""
+        _DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+
+        def _has_days(t: str) -> bool:
+            return sum(1 for d in _DAYS if d in t) >= 2
+
         try:
-            for sel in (
-                '[data-item-id="oh"] button',
-                '[data-item-id="oh"]',
-                'button[jsaction*="openhours"]',
-            ):
+            # Strategy 0: aria-label on the hours element (sometimes has full schedule)
+            for sel in ('[data-item-id="oh"]', '[aria-label*="hour" i]'):
+                el = await page.query_selector(sel)
+                if el:
+                    label = await el.get_attribute('aria-label') or ''
+                    if _has_days(label):
+                        return self._clean_text(label)
+
+            # Click the hours element to expand
+            for sel in ('[data-item-id="oh"] button', '[data-item-id="oh"]',
+                        'button[jsaction*="openhours"]', '[jsaction*="openhours"]'):
                 btn = await page.query_selector(sel)
                 if btn and await btn.is_visible():
                     await human_click(page, btn)
-                    await asyncio.sleep(1.2)
-                    for sched_sel in ('table.eK4R0e', 'div.eK4R0e', '[data-day-of-week]'):
-                        el = await page.query_selector(sched_sel)
-                        if el:
-                            return self._clean_text(await el.inner_text())
-                    # Fallback: read any aria-expanded container
-                    exp = await page.query_selector('[aria-expanded="true"]')
-                    if exp:
-                        text = self._clean_text(await exp.inner_text())
-                        if len(text) > 20:
-                            return text
+                    await asyncio.sleep(1.5)
                     break
+
+            # Strategy 1: known stable table/div selectors
+            for sel in ('table.eK4R0e', 'div.eK4R0e', 'div.o0Svhf',
+                        'div.t39EBf', '[data-day-of-week]'):
+                el = await page.query_selector(sel)
+                if el:
+                    text = self._clean_text(await el.inner_text())
+                    if _has_days(text):
+                        return text
+
+            # Strategy 2: any aria-expanded container with day content
+            exp = await page.query_selector('[aria-expanded="true"]')
+            if exp:
+                text = self._clean_text(await exp.inner_text())
+                if _has_days(text) and len(text) > 20:
+                    return text
+
+            # Strategy 3: scan divs for one containing multiple weekday names
+            for div in await page.query_selector_all('div, section, table'):
+                try:
+                    text = (await div.inner_text()).strip()
+                    if 30 < len(text) < 600 and _has_days(text):
+                        return self._clean_text(text)
+                except Exception:
+                    pass
+
         except Exception:
             pass
         return ""
 
     @staticmethod
     def _clean_text(text: str) -> str:
-        """Strip leading Google Maps icon characters from inner_text() results.
+        """Strip icon glyphs and normalise Unicode spaces from Google Maps inner_text().
 
-        Google Maps prepends an icon glyph (non-ASCII Unicode) + newline before
-        address/phone text. Discard any line that has no ASCII letter or digit.
+        Google Maps prepends a non-ASCII icon glyph + newline before address/phone
+        text, and uses U+202F (NARROW NO-BREAK SPACE) inside time strings.
+        Discard any line that has no ASCII letter or digit; normalise Unicode
+        spaces to regular ASCII spaces so CSVs open correctly in Excel.
         """
+        # Normalise Unicode spaces → regular space
+        text = text.replace(' ', ' ').replace(' ', ' ').replace(' ', ' ')
+        # Strip trailing "See more hours" boilerplate
+        text = re.sub(r'\s*See more hours\s*$', '', text, flags=re.IGNORECASE)
         lines = text.strip().splitlines()
         clean = [
             l.strip() for l in lines

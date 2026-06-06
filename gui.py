@@ -91,6 +91,7 @@ class ColumnMapperDialog(ctk.CTkToplevel):
         self.grab_set()
         self.lift()
         self.focus_force()
+        self.wm_attributes('-topmost', True)
 
         self._filepath  = filepath
         self._on_import = on_import
@@ -402,6 +403,7 @@ class App(ctk.CTk):
         self.geometry("1120x680")
         self.minsize(820, 480)
         self.configure(fg_color=BG_APP)
+        self.after(150, lambda: (self.wm_attributes('-topmost', True), self.focus_force()))
 
         self._q:            queue.Queue   = queue.Queue()
         self._stop_event =  threading.Event()
@@ -431,7 +433,6 @@ class App(ctk.CTk):
             w = int(cfg.get("workers", 2))
             self._workers_slider.set(w)
             self._workers_val_label.configure(text=str(w))
-            self._headless_var.set(cfg.get("headless", False))
             self._reviews_var.set(cfg.get("reviews_enabled", False))
             self._review_depth_entry.configure(state="normal")
             self._review_depth_entry.delete(0, "end")
@@ -445,12 +446,11 @@ class App(ctk.CTk):
 
     def _save_config(self):
         cfg = {
-            "keyword":        self._kw_entry.get().strip(),
-            "depth":          self._depth_entry.get().strip(),
-            "workers":        self._get_workers(),
-            "headless":       self._headless_var.get(),
+            "keyword":         self._kw_entry.get().strip(),
+            "depth":           self._depth_entry.get().strip(),
+            "workers":         self._get_workers(),
             "reviews_enabled": self._reviews_var.get(),
-            "reviews_depth":  self._review_depth_entry.get().strip(),
+            "reviews_depth":   self._review_depth_entry.get().strip(),
         }
         try:
             CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
@@ -531,14 +531,6 @@ class App(ctk.CTk):
         )
         self._workers_slider.set(2)
         self._workers_slider.pack(fill="x", padx=16, pady=(0, 10))
-
-        self._headless_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            cfg_frame, text="Headless mode",
-            variable=self._headless_var,
-            font=ctk.CTkFont(size=11), text_color=TX_MUT,
-            checkbox_width=18, checkbox_height=18,
-        ).pack(anchor="w", padx=16, pady=(0, 4))
 
         # Reviews row: checkbox + depth entry inline
         rev_row = ctk.CTkFrame(cfg_frame, fg_color="transparent")
@@ -629,6 +621,26 @@ class App(ctk.CTk):
             width=108, height=26, fg_color=BG_CARD, button_color=BD,
             dropdown_fg_color=BG_CARD, font=ctk.CTkFont(size=10))
         self._filter_phone.pack(side="left", padx=(4, 0))
+
+        # Clamp filter entries to valid ranges on focus-out
+        def _clamp_entry(entry, lo, hi, is_float=True):
+            def _cb(_):
+                v = entry.get().strip()
+                if not v:
+                    return
+                try:
+                    val = float(v) if is_float else int(v)
+                    val = max(lo, min(hi, val))
+                    entry.delete(0, "end")
+                    entry.insert(0, str(val) if is_float else str(int(val)))
+                except ValueError:
+                    entry.delete(0, "end")
+            return _cb
+
+        self._filter_min_rat.bind("<FocusOut>", _clamp_entry(self._filter_min_rat, 0.0, 5.0))
+        self._filter_max_rat.bind("<FocusOut>", _clamp_entry(self._filter_max_rat, 0.0, 5.0))
+        self._filter_min_rev.bind("<FocusOut>", _clamp_entry(self._filter_min_rev, 0, 10_000_000, is_float=False))
+        self._filter_max_rev.bind("<FocusOut>", _clamp_entry(self._filter_max_rev, 0, 10_000_000, is_float=False))
 
         ctk.CTkFrame(sb, height=1, fg_color=BD).grid(
             row=4, column=0, sticky="ew", padx=0, pady=(4, 0))
@@ -930,7 +942,6 @@ class App(ctk.CTk):
             locations = [{"location": single, "city": "", "state": "", "country": ""}]
 
         n_workers    = self._get_workers()
-        headless     = self._headless_var.get()
         review_depth = 0
         if self._reviews_var.get():
             try:
@@ -940,16 +951,20 @@ class App(ctk.CTk):
 
         # Build filters dict (only populated entries become active filters)
         filters: dict = {}
-        def _int(entry): return int(v) if (v := entry.get().strip()) else None
-        def _flt(entry): return float(v) if (v := entry.get().strip()) else None
+        def _int(entry):
+            v = entry.get().strip()
+            return int(v) if v else None
+        def _flt(entry):
+            v = entry.get().strip()
+            return float(v) if v else None
         if (v := _int(self._filter_min_rev)) is not None:
-            filters["min_reviews"] = v
+            filters["min_reviews"] = max(0, v)
         if (v := _int(self._filter_max_rev)) is not None:
-            filters["max_reviews"] = v
+            filters["max_reviews"] = max(0, v)
         if (v := _flt(self._filter_min_rat)) is not None:
-            filters["min_rating"] = v
+            filters["min_rating"] = max(0.0, min(5.0, v))
         if (v := _flt(self._filter_max_rat)) is not None:
-            filters["max_rating"] = v
+            filters["max_rating"] = max(0.0, min(5.0, v))
         web_val = self._filter_website.get()
         if web_val == "Must have":
             filters["require_website"] = True
@@ -1010,7 +1025,7 @@ class App(ctk.CTk):
             log_fn=log_fn, worker_status_fn=worker_fn,
             overall_progress_fn=overall_fn,
             record_tick_fn=lambda: self._q.put(("record_tick",)),
-            stop_event=self._stop_event, headless=headless,
+            stop_event=self._stop_event,
             review_depth=review_depth,
             filters=filters,
             scrape_hours=scrape_hours,
