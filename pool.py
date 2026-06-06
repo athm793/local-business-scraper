@@ -14,12 +14,7 @@ from playwright.async_api import async_playwright
 from csv_writer import CsvWriter
 from db import Database
 from scraper import GoogleMapsScraper
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+from stealth import random_user_agent, random_viewport, apply_stealth
 
 
 def parse_locations_csv(filepath: str) -> list:
@@ -100,11 +95,12 @@ class ScraperPool:
         ctx = await p.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             headless=self.headless,
-            viewport={"width": 1280, "height": 900},
+            viewport=random_viewport(),
             args=["--disable-blink-features=AutomationControlled"],
-            user_agent=USER_AGENT,
+            user_agent=random_user_agent(),
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await apply_stealth(page)
 
         try:
             while not self._stop_event.is_set():

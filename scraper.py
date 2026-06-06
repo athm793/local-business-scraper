@@ -21,10 +21,14 @@ from typing import Callable, Optional
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 from db import Database
+from stealth import apply_stealth, human_scroll, maybe_idle, is_blocked, handle_block
 
 
 async def delay(min_s: float = 2.0, max_s: float = 5.0):
-    await asyncio.sleep(random.uniform(min_s, max_s))
+    mean = (min_s + max_s) / 2
+    std  = (max_s - min_s) / 6
+    t = random.gauss(mean, std)
+    await asyncio.sleep(max(min_s, min(max_s, t)))
 
 
 class GoogleMapsScraper:
@@ -87,6 +91,7 @@ class GoogleMapsScraper:
                 ),
             )
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            await apply_stealth(page)
             try:
                 await self._run(page)
             finally:
@@ -108,6 +113,16 @@ class GoogleMapsScraper:
             await page.wait_for_selector('div[role="feed"]', timeout=20000)
         except Exception:
             pass
+
+        if await is_blocked(page):
+            if not await handle_block(page, self._log, self.location):
+                return
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+            try:
+                await page.wait_for_selector('div[role="feed"]', timeout=20000)
+            except Exception:
+                pass
+
         await delay(2, 4)
         await self._dismiss_dialogs(page)
 
@@ -144,6 +159,7 @@ class GoogleMapsScraper:
                 self._log(f"[{scraped_count}/{self.depth}] {data.get('name', 'Unknown')}")
                 self._progress(scraped_count, self.depth)
 
+            await maybe_idle()
             await delay(3, 8)
 
         self._log(f"Done: {scraped_count} records for {self.location}")
@@ -199,8 +215,7 @@ class GoogleMapsScraper:
             if not feed:
                 return False, False
             before = await page.evaluate("el => el.scrollTop", feed)
-            await page.evaluate("el => el.scrollBy(0, 3000)", feed)
-            await delay(1.5, 2.5)
+            await human_scroll(page, feed, 3000)
             after = await page.evaluate("el => el.scrollTop", feed)
             page_text = (await page.inner_text("body")).lower()
             for marker in self.END_OF_RESULTS_MARKERS:
@@ -215,6 +230,11 @@ class GoogleMapsScraper:
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 await delay(2, 4)
+                if await is_blocked(page):
+                    if not await handle_block(page, self._log, url):
+                        return None
+                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    await delay(2, 4)
                 try:
                     await page.wait_for_selector("h1", timeout=8000)
                 except PlaywrightTimeout:
