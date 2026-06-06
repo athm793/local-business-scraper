@@ -526,14 +526,12 @@ class App(ctk.CTk):
         # ── Locations ──────────────────────────────────────────────────────────
         loc_frame = ctk.CTkFrame(sb, fg_color="transparent")
         loc_frame.grid(row=5, column=0, sticky="nsew")
-        loc_frame.grid_columnconfigure(0, weight=1)
-        loc_frame.grid_rowconfigure(4, weight=1)
 
         section_label(loc_frame, "LOCATIONS")
 
         # Buttons row
         btn_r = ctk.CTkFrame(loc_frame, fg_color="transparent")
-        btn_r.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+        btn_r.pack(fill="x", padx=16, pady=(0, 8))
         btn_r.grid_columnconfigure(0, weight=1)
 
         ctk.CTkButton(
@@ -552,7 +550,7 @@ class App(ctk.CTk):
 
         # Manual add
         add_r = ctk.CTkFrame(loc_frame, fg_color="transparent")
-        add_r.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        add_r.pack(fill="x", padx=16, pady=(0, 6))
         add_r.grid_columnconfigure(0, weight=1)
 
         self._manual_entry = ctk.CTkEntry(
@@ -572,13 +570,13 @@ class App(ctk.CTk):
         # Count label
         self._loc_count = ctk.CTkLabel(loc_frame, text="No locations added",
                                         font=ctk.CTkFont(size=10), text_color=TX_MUT)
-        self._loc_count.grid(row=3, column=0, padx=16, sticky="w", pady=(0, 4))
+        self._loc_count.pack(anchor="w", padx=16, pady=(0, 4))
 
         # Scrollable chip list
         self._chip_frame = ctk.CTkScrollableFrame(
             loc_frame, fg_color="transparent",
             scrollbar_button_color=BD, scrollbar_button_hover_color=TX_MUT)
-        self._chip_frame.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 6))
+        self._chip_frame.pack(fill="both", expand=True, padx=16, pady=(0, 6))
 
         ctk.CTkFrame(sb, height=1, fg_color=BD).grid(
             row=6, column=0, sticky="ew", padx=0, pady=(0, 0))
