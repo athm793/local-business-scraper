@@ -56,6 +56,7 @@ class ScraperPool:
         stop_event: threading.Event,
         headless: bool = False,
         record_tick_fn: Optional[Callable[[], None]] = None,
+        review_depth: int = 0,
     ):
         self.keyword = keyword
         self.locations = locations
@@ -69,6 +70,7 @@ class ScraperPool:
         self._record_tick = record_tick_fn
         self._stop_event = stop_event
         self.headless = headless
+        self.review_depth = review_depth
         self._completed_locations = 0
 
     async def run(self):
@@ -152,6 +154,7 @@ class ScraperPool:
                     progress_fn=make_progress(worker_id, location),
                     record_fn=make_record(loc_data),
                     stop_event=self._stop_event,
+                    review_depth=self.review_depth,
                 )
                 await scraper._run(page)
 

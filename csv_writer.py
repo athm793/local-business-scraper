@@ -10,7 +10,7 @@ COLUMNS = [
     "keyword", "location", "city", "state", "country",
     "name", "category", "address", "phone", "website",
     "rating", "review_count", "latitude", "longitude",
-    "place_url", "scraped_at",
+    "place_url", "scraped_at", "reviews",
 ]
 
 

@@ -11,6 +11,7 @@ Imported by pool.py — pass log_fn, progress_fn, record_fn, stop_event for full
 
 import asyncio
 import argparse
+import json
 import random
 import re
 import threading
@@ -21,7 +22,7 @@ from typing import Callable, Optional
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 from db import Database
-from stealth import apply_stealth, human_scroll, maybe_idle, is_blocked, handle_block
+from stealth import apply_stealth, human_click, human_scroll, maybe_idle, is_blocked, handle_block
 
 
 async def delay(min_s: float = 2.0, max_s: float = 5.0):
@@ -52,6 +53,7 @@ class GoogleMapsScraper:
         record_fn: Optional[Callable[[dict], None]] = None,
         stop_event: Optional[threading.Event] = None,
         extra_data: Optional[dict] = None,
+        review_depth: int = 0,
     ):
         self.keyword = keyword
         self.location = location
@@ -63,6 +65,7 @@ class GoogleMapsScraper:
         self._record_fn = record_fn
         self._stop_event = stop_event
         self._extra_data = extra_data or {}
+        self.review_depth = review_depth
 
     def _log(self, msg: str):
         self._log_fn(msg)
@@ -242,7 +245,12 @@ class GoogleMapsScraper:
                         await delay(3, 5)
                         continue
                     return None
-                return await self._extract(page)
+                data = await self._extract(page)
+                if data and self.review_depth > 0:
+                    self._log(f"Scraping up to {self.review_depth} reviews...")
+                    reviews = await self._scrape_reviews(page, self.review_depth)
+                    data["reviews"] = json.dumps(reviews, ensure_ascii=False)
+                return data
             except Exception as e:
                 if attempt == 0:
                     await delay(3, 6)
@@ -250,6 +258,141 @@ class GoogleMapsScraper:
                 self._log(f"[SKIP] {e}")
                 return None
         return None
+
+    async def _scrape_reviews(self, page, max_reviews: int) -> list:
+        """Return up to max_reviews recent reviews from the current business page."""
+        reviews = []
+        try:
+            # ── Open the Reviews tab ──────────────────────────────────────────
+            tabs = await page.query_selector_all('button[role="tab"]')
+            for tab in tabs:
+                text = (await tab.inner_text()).strip().lower()
+                if "review" in text and len(text) < 30:
+                    await human_click(page, tab)
+                    await asyncio.sleep(1.5)
+                    break
+
+            # ── Sort by Newest (best-effort) ──────────────────────────────────
+            sort_btn = await page.query_selector('button[aria-label*="Sort"]')
+            if sort_btn and await sort_btn.is_visible():
+                await human_click(page, sort_btn)
+                await asyncio.sleep(0.7)
+                for item_sel in ('[role="menuitemradio"]', '[role="option"]', 'li'):
+                    items = await page.query_selector_all(item_sel)
+                    for item in items:
+                        text = (await item.inner_text()).strip().lower()
+                        if text in ("newest", "most recent"):
+                            await human_click(page, item)
+                            await asyncio.sleep(1.5)
+                            break
+                    else:
+                        continue
+                    break
+
+            # ── Locate the scrollable review pane ─────────────────────────────
+            pane = None
+            for ps in ('div.m6QErb[aria-label]', 'div[role="feed"]'):
+                pane = await page.query_selector(ps)
+                if pane:
+                    break
+
+            # ── Scroll and collect ────────────────────────────────────────────
+            seen: set = set()
+            stalls = 0
+            while len(reviews) < max_reviews and stalls < 4:
+                # Expand any "More" links so we get full review text
+                for more_btn in await page.query_selector_all('button[aria-label="See more"]'):
+                    try:
+                        if await more_btn.is_visible():
+                            await more_btn.click()
+                    except Exception:
+                        pass
+
+                items = await page.query_selector_all('[data-review-id]')
+                added = 0
+                for item in items:
+                    if len(reviews) >= max_reviews:
+                        break
+                    rid = await item.get_attribute("data-review-id")
+                    if not rid or rid in seen:
+                        continue
+                    seen.add(rid)
+                    added += 1
+
+                    r: dict = {}
+
+                    # Reviewer name
+                    for ns in ('[class*="d4r55"]', 'button[jsaction*="reviewAuthor"]'):
+                        try:
+                            el = await item.query_selector(ns)
+                            if el:
+                                name = (await el.inner_text()).strip()
+                                if name and len(name) < 80:
+                                    r["reviewer"] = name
+                                    break
+                        except Exception:
+                            pass
+
+                    # Star rating
+                    try:
+                        star_el = await item.query_selector('[aria-label*="star"]')
+                        if star_el:
+                            lbl = await star_el.get_attribute("aria-label") or ""
+                            m = re.search(r"(\d+)\s+star", lbl, re.IGNORECASE)
+                            if m:
+                                r["stars"] = int(m.group(1))
+                    except Exception:
+                        pass
+
+                    # Date — find a short span with relative time words
+                    try:
+                        for span in await item.query_selector_all("span"):
+                            t = (await span.inner_text()).strip()
+                            if 1 < len(t) < 40 and any(
+                                w in t.lower() for w in
+                                ("ago", "week", "month", "year", "day", "hour")
+                            ):
+                                r["date"] = t
+                                break
+                    except Exception:
+                        pass
+
+                    # Review text
+                    for ts in ('[class*="wiI7pd"]', 'span[jscontroller]'):
+                        try:
+                            el = await item.query_selector(ts)
+                            if el:
+                                t = (await el.inner_text()).strip()
+                                if t:
+                                    r["text"] = t
+                                    break
+                        except Exception:
+                            pass
+                    if "text" not in r:
+                        # Fallback: longest span in the review card
+                        best = ""
+                        try:
+                            for span in await item.query_selector_all("span"):
+                                t = (await span.inner_text()).strip()
+                                if len(t) > len(best) and len(t) > 20:
+                                    best = t
+                            if best:
+                                r["text"] = best
+                        except Exception:
+                            pass
+
+                    if r:
+                        reviews.append(r)
+
+                stalls = 0 if added else stalls + 1
+                if len(reviews) < max_reviews and pane:
+                    await human_scroll(page, pane, 2000)
+                    await asyncio.sleep(random.gauss(1.3, 0.3))
+
+        except Exception:
+            pass
+
+        return reviews[:max_reviews]
 
     @staticmethod
     def _clean_text(text: str) -> str:

@@ -430,16 +430,25 @@ class App(ctk.CTk):
             self._workers_slider.set(w)
             self._workers_val_label.configure(text=str(w))
             self._headless_var.set(cfg.get("headless", False))
+            self._reviews_var.set(cfg.get("reviews_enabled", False))
+            self._review_depth_entry.configure(state="normal")
+            self._review_depth_entry.delete(0, "end")
+            self._review_depth_entry.insert(0, str(cfg.get("reviews_depth", "10")))
+            self._review_depth_entry.configure(
+                state="normal" if self._reviews_var.get() else "disabled"
+            )
             self._rebuild_worker_rows()
         except Exception:
             pass
 
     def _save_config(self):
         cfg = {
-            "keyword":  self._kw_entry.get().strip(),
-            "depth":    self._depth_entry.get().strip(),
-            "workers":  self._get_workers(),
-            "headless": self._headless_var.get(),
+            "keyword":        self._kw_entry.get().strip(),
+            "depth":          self._depth_entry.get().strip(),
+            "workers":        self._get_workers(),
+            "headless":       self._headless_var.get(),
+            "reviews_enabled": self._reviews_var.get(),
+            "reviews_depth":  self._review_depth_entry.get().strip(),
         }
         try:
             CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
@@ -528,6 +537,32 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11), text_color=TX_MUT,
             checkbox_width=18, checkbox_height=18,
         ).pack(anchor="w", padx=16, pady=(0, 4))
+
+        # Reviews row: checkbox + depth entry inline
+        rev_row = ctk.CTkFrame(cfg_frame, fg_color="transparent")
+        rev_row.pack(fill="x", padx=16, pady=(0, 8))
+
+        self._reviews_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            rev_row, text="Scrape reviews",
+            variable=self._reviews_var,
+            font=ctk.CTkFont(size=11), text_color=TX_MUT,
+            checkbox_width=18, checkbox_height=18,
+            command=self._on_reviews_toggle,
+        ).pack(side="left")
+
+        self._review_depth_entry = ctk.CTkEntry(
+            rev_row, width=46, height=28,
+            fg_color=BG_INPUT, border_color=BD,
+            font=ctk.CTkFont(size=11), text_color=TX,
+            state="disabled",
+        )
+        self._review_depth_entry.insert(0, "10")
+        self._review_depth_entry.pack(side="right", padx=(6, 0))
+
+        ctk.CTkLabel(rev_row, text="per biz",
+                     font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(
+            side="right", padx=(8, 2))
 
         ctk.CTkFrame(sb, height=1, fg_color=BD).grid(
             row=4, column=0, sticky="ew", padx=0, pady=(4, 0))
@@ -752,6 +787,10 @@ class App(ctk.CTk):
         self._rebuild_worker_rows()
         self._update_estimate()
 
+    def _on_reviews_toggle(self):
+        state = "normal" if self._reviews_var.get() else "disabled"
+        self._review_depth_entry.configure(state=state)
+
     def _rebuild_worker_rows(self):
         for r in self._worker_rows:
             r.destroy()
@@ -861,8 +900,14 @@ class App(ctk.CTk):
                 return
             locations = [{"location": single, "city": "", "state": "", "country": ""}]
 
-        n_workers = self._get_workers()
-        headless  = self._headless_var.get()
+        n_workers    = self._get_workers()
+        headless     = self._headless_var.get()
+        review_depth = 0
+        if self._reviews_var.get():
+            try:
+                review_depth = max(1, int(self._review_depth_entry.get().strip() or "10"))
+            except ValueError:
+                review_depth = 10
 
         self._save_config()
 
@@ -911,6 +956,7 @@ class App(ctk.CTk):
             overall_progress_fn=overall_fn,
             record_tick_fn=lambda: self._q.put(("record_tick",)),
             stop_event=self._stop_event, headless=headless,
+            review_depth=review_depth,
         )
 
         def run():

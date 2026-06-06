@@ -9,6 +9,7 @@ class Database:
         "place_url", "name", "category", "address", "phone",
         "website", "rating", "review_count", "latitude", "longitude",
         "keyword", "location", "city", "state", "country", "scraped_at",
+        "reviews",
     ]
 
     def __init__(self, db_path: str = "businesses.db"):
@@ -41,12 +42,13 @@ class Database:
                     city         TEXT,
                     state        TEXT,
                     country      TEXT,
-                    scraped_at   TEXT
+                    scraped_at   TEXT,
+                    reviews      TEXT
                 )
             """)
-            # Migrate older schemas that are missing the city/state/country columns
+            # Migrate older schemas that are missing columns
             existing = {row[1] for row in conn.execute("PRAGMA table_info(businesses)")}
-            for col in ("city", "state", "country"):
+            for col in ("city", "state", "country", "reviews"):
                 if col not in existing:
                     conn.execute(f"ALTER TABLE businesses ADD COLUMN {col} TEXT")
 
