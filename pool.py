@@ -5,6 +5,7 @@ All workers write to the same SQLite DB and CSV file concurrently.
 
 import asyncio
 import csv
+import shutil
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -100,13 +101,25 @@ class ScraperPool:
 
         self._worker_status(worker_id, {"state": "starting", "location": "", "current": 0, "total": 0})
 
-        ctx = await p.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            headless=False,
-            viewport=random_viewport(),
-            args=["--disable-blink-features=AutomationControlled"],
-            user_agent=random_user_agent(),
-        )
+        ctx = None
+        for _attempt in range(2):
+            try:
+                ctx = await p.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=False,
+                    viewport=random_viewport(),
+                    args=["--disable-blink-features=AutomationControlled"],
+                    user_agent=random_user_agent(),
+                )
+                break
+            except Exception as launch_err:
+                if _attempt == 0:
+                    self._log(f"[W{worker_id + 1}] Profile corrupted — resetting and retrying...")
+                    shutil.rmtree(str(profile_dir), ignore_errors=True)
+                    profile_dir.mkdir(exist_ok=True)
+                else:
+                    self._log(f"[W{worker_id + 1}] Failed to launch browser: {launch_err}")
+                    return
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await apply_stealth(page)
 

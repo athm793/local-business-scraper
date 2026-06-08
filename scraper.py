@@ -229,13 +229,16 @@ class GoogleMapsScraper:
             links = await page.query_selector_all(self.RESULT_LINK_SELECTOR)
             for link in links:
                 href = await link.get_attribute("href")
-                if not href or href in seen:
+                if not href:
                     continue
-                seen.add(href)
                 full = (
                     f"https://www.google.com{href}" if href.startswith("/") else href
                 )
-                urls.append(full.split("?")[0])
+                clean = full.split("?")[0]
+                if clean in seen:
+                    continue
+                seen.add(clean)
+                urls.append(clean)
 
             if len(urls) >= self.depth:
                 break
@@ -283,11 +286,11 @@ class GoogleMapsScraper:
                     return None
                 data = await self._extract(page)
                 if data:
-                    if self.scrape_schedule:
-                        data["schedule"] = await self._scrape_schedule(page)
                     if not self._passes_filters(data):
                         self._log(f"[FILTER] Skipped: {data.get('name', '')}")
                         return None
+                    if self.scrape_schedule:
+                        data["schedule"] = await self._scrape_schedule(page)
                     if self.review_depth > 0:
                         self._log(f"Scraping up to {self.review_depth} reviews...")
                         reviews = await self._scrape_reviews(page, self.review_depth)
