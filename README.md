@@ -4,6 +4,7 @@ A multi-worker Google Maps business scraper with a desktop GUI. No proxies, no p
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
@@ -120,3 +121,11 @@ create_shortcut.py # Windows desktop shortcut generator
 - Each worker launches a real, visible (non-headless) Chromium window with its own persistent profile under `browser_profile_<n>/`. Headless mode is intentionally disabled — it's far more detectable.
 - Worker launches are staggered (8s apart) to avoid simultaneous requests from the same machine.
 - This tool automates a public website. Use it responsibly and in accordance with Google's Terms of Service and applicable laws in your jurisdiction.
+
+## Contributing
+
+Issues and pull requests are welcome. For significant changes, open an issue first to discuss what you'd like to change.
+
+## License
+
+[MIT](LICENSE)
