@@ -1,8 +1,9 @@
 browser_profile*/
 outputs/
-businesses.db
-businesses.db-shm
-businesses.db-wal
+*.db
+*.db-shm
+*.db-wal
+scraper_config.json
 __pycache__/
 *.pyc
 *.pyo
