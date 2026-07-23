@@ -6,29 +6,45 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-BG_APP    = "#0d1117"
-BG_SIDE   = "#161b22"
-BG_CARD   = "#21262d"
-BG_INPUT  = "#0d1117"
-BD        = "#30363d"
-TX        = "#e6edf3"
-TX_MUT    = "#8b949e"
-AC_BLUE   = "#58a6ff"
-AC_GREEN  = "#3fb950"
-AC_AMBER  = "#d29922"
-AC_PURPLE = "#bc8cff"
-AC_RED    = "#f85149"
-BTN_GRN   = "#238636"
-BTN_GRN_H = "#2ea043"
-BTN_RED   = "#b91c1c"
-BTN_RED_H = "#dc2626"
+# ── Palette (Terminal console UI · warm amber) ──────────────────────────────────
+BG_APP    = "#0e0c0a"
+BG_SIDE   = "#171310"
+BG_CARD   = "#211b16"
+BG_INPUT  = "#0e0c0a"
+BD        = "#332a22"
+TX        = "#f3ede6"
+TX_MUT    = "#a29384"
+AC_BLUE   = "#5aa2f0"   # "done" / info
+AC_GREEN  = "#4ac47e"   # running / success / rate
+AC_AMBER  = "#f59e0b"   # brand accent — starting / elapsed
+AC_PURPLE = "#f59e0b"   # legacy name; ETA → brand amber
+AC_RED    = "#f26a5a"   # errors / skips
+BRAND     = "#f59e0b"
+BRAND_INK = "#241503"   # dark ink for text on amber fills
+BTN_GRN   = "#f59e0b"   # primary CTA (Start / Import) — amber
+BTN_GRN_H = "#fbbf24"   # hover
+BTN_RED   = "#f26a5a"   # stop (outline red)
+BTN_RED_H = "#3a2420"   # stop hover bg (subtle warm)
+
+FONT_UI   = "Segoe UI"
+FONT_MONO = "Consolas"
+
+# pill text inks (dark ink on solid state fills)
+INK_RUN   = "#04150c"
+INK_DONE  = "#04121f"
+INK_START = "#231502"
 
 STATE_COLORS = {
     "running":  AC_GREEN,
     "done":     AC_BLUE,
     "idle":     TX_MUT,
     "starting": AC_AMBER,
+}
+STATE_INK = {
+    "running":  INK_RUN,
+    "done":     INK_DONE,
+    "starting": INK_START,
+    "idle":     TX_MUT,
 }
 
 CONFIG_FILE   = Path(__file__).parent / "scraper_config.json"
@@ -40,10 +56,10 @@ MAX_LOC_SHOWN = 200
 
 def section_label(parent, text: str):
     ctk.CTkLabel(
-        parent, text=text,
+        parent, text=f"// {text}",
         font=ctk.CTkFont(size=10, weight="bold"),
-        text_color=TX_MUT,
-    ).pack(anchor="w", padx=16, pady=(14, 4))
+        text_color=AC_AMBER,
+    ).pack(anchor="w", padx=16, pady=(11, 3))
 
 
 def _fmt_time(seconds: float) -> str:
@@ -202,7 +218,7 @@ class ColumnMapperDialog(ctk.CTkToplevel):
 
         for ci, col in enumerate(cols_show):
             ctk.CTkLabel(outer, text=col,
-                         font=ctk.CTkFont(size=11, weight="bold"), text_color=AC_BLUE,
+                         font=ctk.CTkFont(size=11, weight="bold"), text_color=AC_AMBER,
                          anchor="w").grid(row=0, column=ci, padx=(12 if ci == 0 else 4, 4),
                                           pady=(10, 4), sticky="w")
 
@@ -286,56 +302,55 @@ class ColumnMapperDialog(ctk.CTkToplevel):
 # ── Widgets ────────────────────────────────────────────────────────────────────
 
 class StatCard(ctk.CTkFrame):
+    """Flat KPI segment — hairline-grid strip (no border/shadow); label over value."""
+
     def __init__(self, parent, title: str, accent: str, **kw):
-        super().__init__(parent, fg_color=BG_CARD, corner_radius=10,
-                         border_width=1, border_color=BD, **kw)
-        ctk.CTkFrame(self, height=3, fg_color=accent, corner_radius=0).pack(
-            fill="x", side="top")
+        super().__init__(parent, fg_color=BG_SIDE, corner_radius=0, **kw)
+        ctk.CTkLabel(self, text=title.upper(),
+                     font=ctk.CTkFont(size=10), text_color=TX_MUT,
+                     anchor="w").pack(fill="x", padx=14, pady=(11, 1))
         self._val = ctk.CTkLabel(self, text="—",
-                                  font=ctk.CTkFont(size=22, weight="bold"), text_color=TX)
-        self._val.pack(pady=(10, 2), padx=12)
-        ctk.CTkLabel(self, text=title,
-                     font=ctk.CTkFont(size=10), text_color=TX_MUT).pack(pady=(0, 10))
+                                  font=ctk.CTkFont(size=22, weight="bold"),
+                                  text_color=accent, anchor="w")
+        self._val.pack(fill="x", padx=14, pady=(0, 11))
 
     def set(self, v: str):
         self._val.configure(text=v)
 
 
 class WorkerRow(ctk.CTkFrame):
-    """Compact card for the 5-column worker grid."""
+    """Compact card for the 5-column worker grid — solid status pill."""
 
     def __init__(self, parent, wid: int):
-        super().__init__(parent, fg_color=BG_CARD, corner_radius=8,
+        super().__init__(parent, fg_color=BG_CARD, corner_radius=6,
                          border_width=1, border_color=BD)
 
         hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.pack(fill="x", padx=8, pady=(6, 0))
-
-        self._dot = ctk.CTkLabel(hdr, text="●", font=ctk.CTkFont(size=8),
-                                  text_color=TX_MUT, width=12)
-        self._dot.pack(side="left")
+        hdr.pack(fill="x", padx=8, pady=(7, 0))
 
         ctk.CTkLabel(hdr, text=f"W{wid + 1}",
                      font=ctk.CTkFont(size=9, weight="bold"),
-                     text_color=TX_MUT).pack(side="left", padx=(2, 0))
+                     text_color=TX_MUT).pack(side="left")
 
-        self._badge = ctk.CTkLabel(hdr, text="Idle",
-                                    font=ctk.CTkFont(size=9), text_color=TX_MUT)
-        self._badge.pack(side="right")
+        self._badge = ctk.CTkLabel(hdr, text="IDLE",
+                                    font=ctk.CTkFont(size=9, weight="bold"),
+                                    fg_color=BD, text_color=TX_MUT,
+                                    corner_radius=4, height=16)
+        self._badge.pack(side="right", ipadx=5)
 
         self._loc = ctk.CTkLabel(self, text="Idle",
                                   font=ctk.CTkFont(size=9), text_color=TX_MUT,
                                   anchor="w")
-        self._loc.pack(fill="x", padx=8, pady=(2, 0))
+        self._loc.pack(fill="x", padx=8, pady=(4, 0))
 
         self._bar = ctk.CTkProgressBar(self, height=4, corner_radius=2,
-                                        progress_color=AC_GREEN)
-        self._bar.pack(fill="x", padx=8, pady=(3, 0))
+                                        fg_color=BD, progress_color=AC_GREEN)
+        self._bar.pack(fill="x", padx=8, pady=(4, 0))
         self._bar.set(0)
 
         self._count = ctk.CTkLabel(self, text="",
                                     font=ctk.CTkFont(size=9), text_color=TX_MUT)
-        self._count.pack(pady=(2, 6))
+        self._count.pack(pady=(3, 7))
 
     def update(self, s: dict):
         state   = s.get("state", "idle")
@@ -345,7 +360,6 @@ class WorkerRow(ctk.CTkFrame):
         color   = STATE_COLORS.get(state, TX_MUT)
 
         loc_text = (loc[:21] + "…") if len(loc) > 22 else loc
-        self._dot.configure(text_color=color)
         self._loc.configure(text=loc_text or "Idle",
                             text_color=TX if state == "running" else TX_MUT)
         self._bar.set(current / total if total else 0)
@@ -354,12 +368,16 @@ class WorkerRow(ctk.CTkFrame):
             text=f"{current:,} / {total:,}" if total else "",
             text_color=TX_MUT,
         )
-        self._badge.configure(text=state.title(), text_color=color)
+        if state == "idle":
+            self._badge.configure(text="IDLE", fg_color=BD, text_color=TX_MUT)
+        else:
+            self._badge.configure(text=state.upper(), fg_color=color,
+                                  text_color=STATE_INK.get(state, BG_APP))
 
 
 class LocationChip(ctk.CTkFrame):
     def __init__(self, parent, text: str):
-        super().__init__(parent, fg_color=BG_CARD, corner_radius=6,
+        super().__init__(parent, fg_color=BG_CARD, corner_radius=5,
                          border_width=1, border_color=BD)
         self.pack(fill="x", padx=0, pady=2)
         ctk.CTkLabel(self, text=text,
